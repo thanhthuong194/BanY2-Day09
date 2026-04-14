@@ -32,10 +32,7 @@ Quy tắc nghiêm ngặt:
 
 
 def _call_llm(messages: list) -> str:
-    """
-    Gọi LLM để tổng hợp câu trả lời.
-    TODO Sprint 2: Implement với OpenAI hoặc Gemini.
-    """
+    """Gọi LLM để tổng hợp câu trả lời (OpenAI hoặc Gemini nếu có API key)."""
     # Option A: OpenAI
     try:
         from openai import OpenAI
@@ -94,8 +91,6 @@ def _estimate_confidence(chunks: list, answer: str, policy_result: dict) -> floa
     - Số lượng và quality của chunks
     - Có exceptions không
     - Answer có abstain không
-
-    TODO Sprint 2: Có thể dùng LLM-as-Judge để tính confidence chính xác hơn.
     """
     if not chunks:
         return 0.1  # Không có evidence → low confidence

@@ -28,25 +28,54 @@ WORKER_NAME = "policy_tool_worker"
 # ─────────────────────────────────────────────
 
 def _call_mcp_tool(tool_name: str, tool_input: dict) -> dict:
-    """
-    Gọi MCP tool.
-
-    Sprint 3 TODO: Implement bằng cách import mcp_server hoặc gọi HTTP.
-
-    Hiện tại: Import trực tiếp từ mcp_server.py (trong-process mock).
-    """
+    """Gọi MCP tool (ưu tiên HTTP nếu có MCP_SERVER_URL, fallback in-process mock)."""
     from datetime import datetime
 
+    ts = datetime.now().isoformat()
+
+    base_url = os.getenv("MCP_SERVER_URL") or os.getenv("MCP_HTTP_URL")
+    if base_url:
+        try:
+            import json
+            from urllib import request
+
+            url = base_url.rstrip("/") + "/tools/call"
+            payload = json.dumps({"tool_name": tool_name, "tool_input": tool_input}).encode("utf-8")
+            req = request.Request(
+                url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with request.urlopen(req, timeout=10) as resp:
+                raw = resp.read().decode("utf-8")
+
+            try:
+                output = json.loads(raw)
+            except Exception:
+                output = {"raw": raw}
+
+            return {
+                "tool": tool_name,
+                "input": tool_input,
+                "output": output,
+                "error": None,
+                "timestamp": ts,
+            }
+        except Exception:
+            # Nếu HTTP fail thì fallback sang mock in-process
+            pass
+
     try:
-        # TODO Sprint 3: Thay bằng real MCP client nếu dùng HTTP server
         from mcp_server import dispatch_tool
+
         result = dispatch_tool(tool_name, tool_input)
         return {
             "tool": tool_name,
             "input": tool_input,
             "output": result,
             "error": None,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": ts,
         }
     except Exception as e:
         return {
@@ -54,7 +83,7 @@ def _call_mcp_tool(tool_name: str, tool_input: dict) -> dict:
             "input": tool_input,
             "output": None,
             "error": {"code": "MCP_CALL_FAILED", "reason": str(e)},
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": ts,
         }
 
 
@@ -63,20 +92,7 @@ def _call_mcp_tool(tool_name: str, tool_input: dict) -> dict:
 # ─────────────────────────────────────────────
 
 def analyze_policy(task: str, chunks: list) -> dict:
-    """
-    Phân tích policy dựa trên context chunks.
-
-    TODO Sprint 2: Implement logic này với LLM call hoặc rule-based check.
-
-    Cần xử lý các exceptions:
-    - Flash Sale → không được hoàn tiền
-    - Digital product / license key / subscription → không được hoàn tiền
-    - Sản phẩm đã kích hoạt → không được hoàn tiền
-    - Đơn hàng trước 01/02/2026 → áp dụng policy v3 (không có trong docs)
-
-    Returns:
-        dict with: policy_applies, policy_name, exceptions_found, source, rule, explanation
-    """
+    """Phân tích policy dựa trên context chunks (rule-based)."""
     task_lower = task.lower()
     context_text = " ".join([c.get("text", "") for c in chunks]).lower()
 
@@ -111,24 +127,48 @@ def analyze_policy(task: str, chunks: list) -> dict:
     policy_applies = len(exceptions_found) == 0
 
     # Determine which policy version applies (temporal scoping)
-    # TODO: Check nếu đơn hàng trước 01/02/2026 → v3 applies (không có docs, nên flag cho synthesis)
     policy_name = "refund_policy_v4"
     policy_version_note = ""
-    if "31/01" in task_lower or "30/01" in task_lower or "trước 01/02" in task_lower:
-        policy_version_note = "Đơn hàng đặt trước 01/02/2026 áp dụng chính sách v3 (không có trong tài liệu hiện tại)."
 
-    # TODO Sprint 2: Gọi LLM để phân tích phức tạp hơn
-    # Ví dụ:
-    # from openai import OpenAI
-    # client = OpenAI()
-    # response = client.chat.completions.create(
-    #     model="gpt-4o-mini",
-    #     messages=[
-    #         {"role": "system", "content": "Bạn là policy analyst. Dựa vào context, xác định policy áp dụng và các exceptions."},
-    #         {"role": "user", "content": f"Task: {task}\n\nContext:\n" + "\n".join([c['text'] for c in chunks])}
-    #     ]
-    # )
-    # analysis = response.choices[0].message.content
+    import re
+    from datetime import date
+
+    cutoff = date(2026, 2, 1)
+
+    def _parse_mentioned_dates(text: str) -> list:
+        found = []
+
+        # dd/mm/yyyy
+        for d, m, y in re.findall(r"(\d{1,2})/(\d{1,2})/(\d{4})", text):
+            try:
+                found.append(date(int(y), int(m), int(d)))
+            except ValueError:
+                pass
+
+        # dd/mm (assume year 2026) — tránh double count nếu đã có yyyy
+        for d, m in re.findall(r"(\d{1,2})/(\d{1,2})", text):
+            if re.search(rf"{re.escape(d)}/{re.escape(m)}/\d{{4}}", text):
+                continue
+            try:
+                found.append(date(2026, int(m), int(d)))
+            except ValueError:
+                pass
+
+        return found
+
+    mentioned_dates = _parse_mentioned_dates(task_lower + " " + context_text)
+    is_v3_out_of_docs = ("trước 01/02/2026" in task_lower) or any(dt < cutoff for dt in mentioned_dates)
+
+    if is_v3_out_of_docs:
+        policy_name = "refund_policy_v3"
+        policy_applies = False
+        note = "Đơn hàng trước 01/02/2026 áp dụng chính sách v3 (không có trong tài liệu hiện tại)."
+        policy_version_note = note
+        exceptions_found.append({
+            "type": "policy_version_v3_out_of_docs",
+            "rule": note,
+            "source": "N/A",
+        })
 
     sources = list({c.get("source", "unknown") for c in chunks if c})
 
@@ -138,7 +178,7 @@ def analyze_policy(task: str, chunks: list) -> dict:
         "exceptions_found": exceptions_found,
         "source": sources,
         "policy_version_note": policy_version_note,
-        "explanation": "Analyzed via rule-based policy check. TODO: upgrade to LLM-based analysis.",
+        "explanation": "Analyzed via rule-based policy check.",
     }
 
 
