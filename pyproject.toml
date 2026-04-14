@@ -1,0 +1,14 @@
+[project]
+name = "bany2-day09"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "chromadb>=0.4.22",
+    "openai>=1.12.0",
+    "pytest>=8.0.0",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0.1",
+    "sentence-transformers>=2.6.0",
+]
