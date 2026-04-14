@@ -1,10 +1,13 @@
 # Báo Cáo Nhóm — Lab Day 09: Multi-Agent Orchestration
 
-**Tên nhóm:** AI Engineer Solo  
+**Tên nhóm:** Y2 - C401  
 **Thành viên:**
-| Tên | Vai trò | Email |
-|-----|---------|-------|
-| AI Engineer | Supervisor Owner + Worker Owner + MCP Owner + Trace & Docs Owner | ai@lab.internal |
+| Tên | Vai trò | Sprint |
+|-----|---------|--------|
+| Lê Văn Tùng | Supervisor Owner | Sprint 1 |
+| Lê Thanh Thưởng | Worker Owner | Sprint 2 |
+| Nguyễn Đức Sĩ | MCP Owner | Sprint 3 |
+| Đinh Thái Tuấn | Trace & Docs Owner | Sprint 4 |
 
 **Ngày nộp:** 2026-04-14  
 **Repo:** PracticalAI/BanY2-Day09  
@@ -96,9 +99,36 @@ Trace q15 cho thấy 2 MCP calls thành công (search_kb + get_ticket_info) qua 
 
 ## 4. So sánh Day 08 vs Day 09
 
-**Metric thay đổi rõ nhất:**
+**Lưu ý về metrics:** Day 08 và Day 09 dùng thang đo khác nhau. Day 08 chấm bằng LLM-as-Judge (Faithfulness/Relevance/Completeness/Context Recall trên thang 5) còn Day 09 đo confidence, latency, MCP usage. Phần so sánh dưới đây dùng số liệu thực tế từ cả hai ngày — không ước tính.
 
-Latency tăng từ ~1,500ms (Day 08 estimate) lên 4,689ms (Day 09 actual) — chậm hơn ~3x. Đây là trade-off rõ ràng nhất. Tuy nhiên, debug time giảm từ ~20 phút (đọc code) xuống ~5 phút (đọc trace).
+**Số liệu thực tế Day 08 (scorecard_baseline):**
+| Metric | Baseline (dense) | Variant (hybrid+rerank) |
+|--------|-----------------|------------------------|
+| Faithfulness | **4.80/5** | 4.50/5 |
+| Relevance | **5.00/5** | 4.60/5 |
+| Context Recall | **5.00/5** | 5.00/5 |
+| Completeness | **4.20/5** | 3.90/5 |
+| Latency | không đo (ước tính ~1,500ms/query) | không đo |
+
+**Số liệu thực tế Day 09 (từ `artifacts/traces/`, 15 câu):**
+| Metric | Giá trị |
+|--------|---------|
+| Avg confidence | 0.549 (range: 0.30–0.75) |
+| Avg latency | **4,689ms** (range: 2,700–14,095ms) |
+| MCP usage | 7/15 queries (47%) |
+| HITL triggered | 1/15 (q09 — ERR-403-AUTH) |
+| Routing: retrieval_worker | 8/15 queries |
+| Routing: policy_tool_worker | 7/15 queries |
+
+**So sánh trực tiếp theo từng chiều:**
+
+| Chiều so sánh | Day 08 (single RAG) | Day 09 (multi-agent) |
+|---------------|--------------------|--------------------|
+| Latency | ~1,500ms ước tính (không đo thực tế) | **4,689ms thực tế** — chậm hơn ~3x |
+| Debuggability | Đọc code + log LLM call, ~20 phút/lỗi | Đọc trace JSON (route_reason + worker_io_logs), ~5 phút/lỗi |
+| Abstain | LLM tự abstain khi context thiếu | HITL trigger (q09) + structured abstain qua confidence < 0.4 |
+| Multi-hop | Không native — single retrieval + single prompt | Cross-worker (q15: search_kb + get_ticket_info, 2 MCP calls) |
+| Routing transparency | Không có — single path | `route_reason` ghi lý do rõ ràng trong mỗi trace |
 
 **Điều bất ngờ nhất khi chuyển từ single sang multi-agent:**
 
@@ -106,7 +136,7 @@ Routing không cần LLM vẫn đủ chính xác cho 87% cases. Ban đầu dự 
 
 **Trường hợp multi-agent KHÔNG giúp ích:**
 
-q01, q04, q05, q06 — câu đơn giản một tài liệu. Multi-agent chỉ thêm overhead ~3 giây mà không cải thiện answer quality. Với các câu này, Day 08 single-agent nhanh và đủ tốt.
+q01, q04, q05, q06 — câu đơn giản một tài liệu. Multi-agent chỉ thêm overhead ~3 giây mà không cải thiện answer quality. Với các câu này, Day 08 single-agent nhanh và đủ tốt hơn về latency.
 
 ---
 
@@ -114,22 +144,22 @@ q01, q04, q05, q06 — câu đơn giản một tài liệu. Multi-agent chỉ th
 
 | Thành viên | Phần đã làm | Sprint |
 |------------|-------------|--------|
-| AI Engineer | graph.py — AgentState, supervisor_node, route_decision, build_graph | 1 |
-| AI Engineer | workers/ — retrieval, policy_tool, synthesis; contracts/worker_contracts.yaml | 2 |
-| AI Engineer | mcp_server.py — 4 tools với dispatch_tool + validation | 3 |
-| AI Engineer | eval_trace.py, docs/, reports/ — run 15 questions, analyze, document | 4 |
+| Lê Văn Tùng | `graph.py` — AgentState, supervisor_node, route_decision, build_graph, run_graph, save_trace | 1 |
+| Lê Thanh Thưởng | `workers/retrieval.py`, `workers/policy_tool.py`, `workers/synthesis.py`; `contracts/worker_contracts.yaml` | 2 |
+| Nguyễn Đức Sĩ | `mcp_server.py` — 4 tools (search_kb, get_ticket_info, check_access_permission, create_ticket) với dispatch_tool + validation | 3 |
+| Đinh Thái Tuấn | `eval_trace.py`, `docs/`, `reports/` — run 15 questions, analyze traces, compare Day 08 vs Day 09, document | 4 |
 
 **Điều làm tốt:**
 
-MCP server có validation đầy đủ (required fields, enum check, default values) nên dispatch_tool không crash với invalid input. Synthesis worker dùng temperature 0.1 và system prompt strict — không có hallucination trong 15 test questions.
+MCP server (Nguyễn Đức Sĩ) có validation đầy đủ — required fields, enum check, default values — nên `dispatch_tool` không crash với invalid input. Synthesis worker (Lê Thanh Thưởng) dùng temperature 0.1 và system prompt strict — không có hallucination trong 15 test questions.
 
 **Điều làm chưa tốt:**
 
-`analyze_policy()` trong policy_tool_worker xử lý temporal scoping chưa đủ chính xác — q12 sai vì không extract `order_date` riêng biệt. Nếu có thêm thời gian, sẽ thêm field `order_date` vào state và xử lý trước khi vào policy analysis.
+`analyze_policy()` trong `policy_tool_worker` (Lê Thanh Thưởng) xử lý temporal scoping chưa đủ chính xác — q12 sai vì không extract `order_date` riêng biệt. Nếu có thêm thời gian, sẽ thêm field `order_date` vào state và xử lý trước khi vào policy analysis.
 
 **Nếu làm lại:**
 
-Định nghĩa `worker_contracts.yaml` trước khi code workers để đảm bảo I/O contract nhất quán ngay từ đầu, thay vì viết workers rồi mới document contracts sau.
+Lê Văn Tùng định nghĩa `worker_contracts.yaml` trước khi Lê Thanh Thưởng code workers để đảm bảo I/O contract nhất quán ngay từ đầu, thay vì viết workers rồi mới document contracts sau.
 
 ---
 
